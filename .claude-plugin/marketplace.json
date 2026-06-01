@@ -1,0 +1,16 @@
+{
+  "name": "neoclouds",
+  "owner": {
+    "name": "Matthew",
+    "email": "matthew@getglad.me"
+  },
+  "description": "Skills published by getglad.",
+  "plugins": [
+    {
+      "name": "cloud-security-posture",
+      "source": "./plugins/cloud-security-posture",
+      "description": "Evaluate a cloud platform's security posture from its public surface, producing a markdown report and CSV(s).",
+      "category": "security"
+    }
+  ]
+}

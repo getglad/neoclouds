@@ -1,0 +1,10 @@
+{
+  "name": "cloud-security-posture",
+  "description": "Evaluate a cloud platform's security posture from its public surface across five signals plus network, edge, source-control, and org-substrate cross-cutting concerns, producing a markdown report and CSV(s).",
+  "author": {
+    "name": "Matthew",
+    "email": "matthew@getglad.me"
+  },
+  "license": "MIT",
+  "keywords": ["security", "cloud", "posture", "neocloud", "audit", "threat-model"]
+}
