@@ -192,6 +192,29 @@ update cadence. Practitioners don't think about firmware because someone else is
 transparently handling it. On a neocloud with leased or partner-owned hardware, this
 assumption breaks down silently.
 
+## Confidential Computing
+
+Distinct from firmware attestation above: that is the provider proving its own stack is
+intact; this is the tenant running workloads the provider cannot read. Status as of
+mid-2026 — these facts are volatile, re-verify them during the fact-check pass.
+
+| Control | AWS | GCP | Azure |
+|---------|-----|-----|-------|
+| Confidential VMs (CPU TEE) | SEV-SNP only (M6a/C6a/R6a, two regions) | SEV / SEV-SNP / TDX across N2D, C2D–C4D, C3 | SEV-SNP (DCasv5/ECasv5), TDX (DCesv6/ECesv6) |
+| Application enclaves | Nitro Enclaves (all regions) | Confidential Space | SGX (DCsv2/DCsv3), confidential containers (ACI) |
+| GPU confidential computing | Announced (GB200 + Nitro Enclaves), not shipped | H100 on A3, single-GPU (TDX + NVIDIA CC mode) | H100 NVL (NCCadsH100v5, SEV-SNP), single-GPU |
+| Tenant-verifiable attestation | KMS attestation-gated key release (enclave PCRs, NitroTPM) | Google Cloud Attestation (EAT tokens, OIDC/PKI) | Microsoft Azure Attestation (itself runs in a TEE) |
+
+Key expectation: a confidential-computing option exists when a workload needs it, and
+attestation can gate key release so the tenant — not the provider — decides whether the
+environment is trustworthy. Note how narrow even the hyperscaler reality is: specific
+SKUs in specific regions, and GPU confidential computing is single-GPU H100-only where
+it ships at all. NVIDIA's own documentation confirms that on Hopper (H100/H200) the
+PCIe path is encrypted but on-package HBM is protected by an access-control firewall,
+not encryption at rest. So when any platform — hyperscaler or neocloud — says
+"confidential computing," the probe is: which slice, on which hardware, protecting
+exactly what, verifiable by whom.
+
 ## Corporate Structure & Geopolitical Baseline
 
 On hyperscalers, the corporate structure and geopolitical questions are mostly settled.
@@ -237,6 +260,7 @@ instinctively look for:
 11. VPC isolation between projects with explicit peering, and private interconnects to corpnet
 12. Scoped, short-lived token delegation to AI tools without sharing full credentials
 13. A known corporate structure, jurisdiction, and financial stability you don't have to research
+14. A confidential-computing option (TEE-backed compute with tenant-verifiable attestation) available when a workload needs it
 
 These expectations are so ingrained that their absence doesn't always register as a gap.
 It registers as confusion — "I can't find the page where I set up resource-level

@@ -1,6 +1,7 @@
 {
   "name": "cloud-security-posture",
-  "description": "Evaluate a cloud platform's security posture from its public surface across five signals plus network, edge, source-control, and org-substrate cross-cutting concerns, producing a markdown report and CSV(s).",
+  "version": "0.0.1",
+  "description": "Evaluate a cloud platform's security posture from its public surface across five signals plus network, edge, source-control, and org-substrate cross-cutting concerns, with an adversarial fact-check pass — producing a markdown report, CSVs, and an account-runnable audit punch-list.",
   "author": {
     "name": "Matthew",
     "email": "matthew@getglad.me"

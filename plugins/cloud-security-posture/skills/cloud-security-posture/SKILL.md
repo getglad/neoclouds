@@ -100,10 +100,16 @@ you find:
   primitives are actually usable, not just present. Don't expect a separate "agent
   identity" feature; an agent is just another caller, so a token you can't scope to a
   single action can't be safely delegated to automation either.
-- **Supply chain** — can you verify what you're running and who can change it?
+- **Supply chain** — can you verify what you're running and who can change it? Two
+  distinct hardware questions, not one: provider-side integrity (attestation — "has this
+  machine been tampered with?") and tenant-facing confidential compute (TEEs — "can I run
+  workloads the provider itself cannot read?"). A platform can score well on the first
+  and offer nothing on the second.
 - **Organizational maturity** — does the provider have the machinery to respond when
   something breaks? The cheap tell is a VDP with safe-harbor language; watch the *actual*
-  SOC 2 scope vs. what's assumed.
+  SOC 2 scope vs. what's assumed. Size the claims against the organization: operating
+  history and security headcount bound what "24/7 response" or "mature program" can
+  actually mean.
 - **Transparency** — how the platform handles what it does *not* do. Classify each
   finding's documentation quality (Step 3); a platform that documents its own gaps is
   giving you something to act on, and that classification is itself a finding.
@@ -134,6 +140,36 @@ Capture these fields for every probe (full schema in `references/output-formats.
   probe informs, so it lands in the right cell deterministically instead of by keyword
   guess.
 
+## Step 3.5 — Adversarially verify the findings
+
+Before you publish, try to *refute* your own draft. This is an internal red-team of the
+findings, not an attack on the platform — the objective, constructive stance from the top
+of this file is unchanged; you're being skeptical about whether *you* got it right. The
+failure mode this catches is a confident-sounding claim that has gone stale, which is
+worse than an honest `unknown` because it makes the reader stop looking.
+
+Prioritize the falsifiable, time-sensitive claims — they're where drafts rot:
+
+- service **availability / deprecation** (a service "closed to new customers" may have
+  reopened; a "deprecated" one may be GA again),
+- **pricing**, **default-on vs. opt-in** behavior, **retention windows**,
+- **recently launched** features, and named **people / dates / versions**.
+
+For each checked claim, record a verdict — `confirmed` / `refuted` / `outdated` /
+`uncertain` — with a source URL, in the JSON (`corrections` array, and/or a per-probe
+`verification` object; schema in `references/output-formats.md`). **When a correction
+contradicts a finding, fix the finding text itself — edit it, don't just append a
+footnote** (set `reconciled: true` once you have). Then emit the fact-check so it travels
+with the deliverables:
+
+```bash
+python scripts/generate_csv.py --mode corrections --in <platform>.json --out-dir ./out
+```
+
+A run that overturns nothing still benefits: the empty/clean corrections file is evidence
+the pass happened. Don't skip it because the findings "look right" — that's exactly when
+stale facts survive.
+
 ## Step 4 — Generate the outputs
 
 Every evaluation produces a markdown report **and** CSV(s) — one deliverable in two forms,
@@ -146,9 +182,13 @@ JSON schema, CSV columns, and report templates.
    columns stable across runs):
    ```bash
    python scripts/generate_csv.py --mode deep-dive --in <platform>.json --out-dir ./out
-   # multi-platform: --mode matrix --in a.json b.json c.json   (also writes comparison-matrix.csv)
-   # checklist only: --mode checklist                          (no JSON needed)
+   # multi-platform:  --mode matrix --in a.json b.json c.json   (also writes comparison-matrix.csv)
+   # probe scaffold:  --mode checklist                          (no JSON needed; writes probing-checklist.csv)
+   # fact-check pass: --mode corrections --in <platform>.json   (writes <platform>-corrections.csv)
+   # audit punch-list:--mode audit       --in <platform>.json   (writes <platform>-audit-checklist.csv)
    ```
+   The `audit` punch-list (recommendations → account-runnable checks) is a different
+   deliverable from the `checklist` probe scaffold; don't conflate them.
 3. **Write the report from the same JSON** — `<platform>-assessment.md` (single) or
    `<platforms>-comparison.md` (multi): context, a top-line read, per-signal findings,
    cross-cutting, and recommendations.
@@ -168,3 +208,6 @@ Habits that keep the assessment trustworthy and usable:
 - **Stay factual; credit strengths alongside gaps.** You're producing an objective record
   for the reader to act on — not a verdict, a score, or a takedown. Note what is genuinely
   well done as readily as what is missing, and keep the tone neutral.
+- **Verify before you publish (Step 3.5).** A confident-sounding stale fact is worse than
+  an `unknown`. Time-sensitive claims get a refutation attempt and a recorded verdict; a
+  correction that contradicts a finding means you edit the finding, not footnote it.

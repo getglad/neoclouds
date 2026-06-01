@@ -417,6 +417,50 @@ The goal: determine what you're actually running on and who controls the artifac
   getting something else, that's a procurement issue. If the platform has no mechanism
   to verify, it's also a trust issue.
 
+### Confidential Computing & TEEs
+
+Hardware attestation (above) answers "has this machine been tampered with?" — the
+provider stays inside your trusted computing base. Confidential computing inverts the
+question: can you run workloads the provider itself cannot read? On a neocloud whose
+rack ops sit with an unnamed colo partner, that is the difference between trusting the
+partner and not needing to.
+
+- **Does the platform offer TEE-backed confidential compute (AMD SEV-SNP, Intel TDX, SGX enclaves)?**
+  Why: A TEE encrypts guest memory with keys the hypervisor never holds, removing the
+  host — and the humans who operate it — from the trusted computing base. Without one,
+  "encrypted at rest and in transit" still leaves your data plaintext in RAM on someone
+  else's machine. Note which tier offers it: a confidential-VM SKU in a separate product
+  line does not protect the managed or serverless path most customers actually use.
+
+- **Is GPU confidential computing available (NVIDIA CC mode on supported GPUs)?**
+  Why: For AI workloads the sensitive data — weights, prompts, training sets — lives in
+  GPU memory, not system RAM, so a CPU-only TEE leaves the part that matters exposed.
+  GPU CC mode extends the trust boundary to the GPU — but verify what each generation
+  actually protects: on Hopper (H100/H200) the PCIe path is encrypted while on-package
+  HBM relies on an access-control firewall, not encryption at rest, per NVIDIA's own
+  documentation. Also pin down single-GPU vs. multi-GPU support and the performance
+  cost. A platform repeating "fully encrypted GPU memory" marketing is itself a
+  doc-quality finding.
+
+- **Can the tenant verify attestation themselves before releasing keys or data?**
+  Why: Attestation that terminates at the provider's dashboard is a trust statement, not
+  evidence. The useful pattern is attestation-gated key release: your key management
+  verifies the enclave or VM measurement before releasing decryption keys. Is the
+  attestation report format documented? Is there a verifier endpoint or reference flow
+  you can run yourself, against a root of trust the provider does not control?
+
+- **What memory encryption applies to ordinary, non-TEE instances?**
+  Why: Transparent memory encryption on standard instances is a much weaker control —
+  the provider holds the keys — but its presence signals hardware generation and
+  defaults posture, and its absence means a physical attack on a colo rack can read
+  tenant memory in the clear.
+
+- **If the platform resells partner capacity, does confidential compute survive the indirection?**
+  Why: A TEE claim is only as strong as the firmware and microcode under it. If GPU
+  racks are operated by data-center partners, ask whether CC-capable firmware versions,
+  vTPM provisioning, and attestation roots of trust are consistent across partners — or
+  whether the marketing page describes only the provider-owned fraction of the fleet.
+
 ### Container Registry
 
 - **How does the platform authenticate to your container registry?**
@@ -529,6 +573,20 @@ security incidents and evolve their security posture.
 - **Does the vendor publish post-incident reports?**
   Why: Post-incident transparency signals organizational maturity. Silence after
   incidents signals the opposite.
+
+- **How long has the platform been operating?**
+  Why: Years in business is a weak signal alone, but operating history is where the
+  other signals become testable: a platform eighteen months old has no incident track
+  record to evaluate, no deprecation behavior to observe, and no pattern of how it
+  handles disclosure. Treat youth as a set of unknowns to probe, not a defect — but
+  treat a young platform claiming a fully mature security story with extra skepticism.
+
+- **How large is the engineering organization — and the security function within it?**
+  Why: A fifteen-person company "with a security team" usually means one person,
+  part-time. Headcount is discoverable (hiring pages, LinkedIn, conference talks); the
+  ratio of security to product engineering tells you whether security can keep pace
+  with feature velocity. It also bounds operational claims: a 24/7 incident response
+  commitment requires people to staff the pager.
 
 ### Leadership, Funding & Geopolitical Risk
 

@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """
-generate_csv.py — CSV outputs for cloud-security-posture-may-20 skill.
+generate_csv.py — CSV outputs for the cloud-security-posture skill.
 
 Modes:
-  deep-dive  — one CSV per platform, rows = probes (default for single-platform input)
-  matrix     — one CSV across platforms, rows = platforms (requires ≥2 inputs)
-  checklist  — full probe set as a first-pass scaffold CSV, every probe seeded unknown (no JSON input)
+  deep-dive   — one CSV per platform, rows = probes (default for single-platform input)
+  matrix      — one CSV across platforms, rows = platforms (requires ≥2 inputs)
+  checklist   — full probe set as a first-pass scaffold CSV, every probe seeded unknown (no JSON input)
+  corrections — one CSV per platform: fact-check verdicts (refuted/outdated/...) with sources
+  audit       — one CSV per platform: recommendations as an account-runnable audit punch-list
+
+The `checklist` and `audit` modes are different deliverables: `checklist` exports the
+probing *questions* as a blank scaffold; `audit` turns the assessment's *recommendations*
+into account-runnable check items. They never share a filename.
 
 Schema for JSON inputs: see references/output-formats.md
 """
@@ -41,6 +47,12 @@ MATRIX_COLUMNS = [
      ["supply_chain"], ["signing", "cosign", "sigstore", "image verification"]),
     ("hardware_attestation", "Supply Chain — Hardware/firmware attestation",
      ["supply_chain"], ["attestation", "firmware", "tpm", "secure boot"]),
+    # Distinct from hardware_attestation: that column is provider-side integrity ("has
+    # this machine been tampered with"); this one is tenant-facing confidentiality ("can
+    # I run workloads the provider itself cannot read"). Keyword hints avoid bare "tee"
+    # and "sev" — substrings of common words (committee, severity).
+    ("confidential_compute", "Supply Chain — Confidential compute / TEE for tenant workloads",
+     ["supply_chain"], ["confidential", "sev-snp", "tdx", "sgx", "enclave", "memory encryption"]),
     # Organizational substrate / cross-cutting
     ("hierarchy", "Org Substrate — Hierarchy (Org/Folder/Project)",
      ["cross_cutting:organizational_substrate"], ["hierarchy", "organization", "folder", "project"]),
@@ -76,6 +88,8 @@ MATRIX_COLUMNS = [
     # Geopolitical
     ("incorporation_jurisdiction", "Org Maturity — Incorporation jurisdiction & data center locations",
      ["org_maturity"], ["incorporat", "jurisdiction", "data center", "sovereign"]),
+    ("operational_track_record", "Org Maturity — Operational track record (age, team size)",
+     ["org_maturity"], ["founded", "team size", "headcount", "track record", "operating since"]),
 ]
 
 
@@ -88,6 +102,19 @@ STATUS_VOCAB = {"present", "partial", "absent", "misleading", "unknown"}
 # Most-cautionary-first ordering, used to pick a single status when several probes map
 # to one matrix column. A gap must never be hidden behind a rosier sibling probe.
 STATUS_SEVERITY = {"misleading": 0, "absent": 1, "partial": 2, "present": 3, "unknown": 4}
+
+# Controlled vocab for a verification verdict (the adversarial fact-check pass). An
+# unrecognized value is coerced to "uncertain" rather than raising — same defensive
+# posture as raw_status().
+VERDICT_VOCAB = {"confirmed", "refuted", "outdated", "uncertain"}
+
+# A verdict that means "the draft finding was wrong" — these get surfaced as correction
+# rows even when only recorded inline on a probe's `verification` object.
+VERDICT_NEEDS_CORRECTION = {"refuted", "outdated"}
+
+# Recommendation priority vocab for the audit punch-list. Missing/invalid -> P2.
+PRIORITY_VOCAB = {"P0", "P1", "P2"}
+PRIORITY_ORDER = {"P0": 0, "P1": 1, "P2": 2}
 
 
 def _collapse(text: str) -> str:
@@ -126,6 +153,14 @@ def raw_status(p: dict) -> str:
     """The author-assigned status, validated against the controlled vocabulary."""
     s = (p.get("status") or "").strip().lower()
     return s if s in STATUS_VOCAB else "unknown"
+
+
+def _verdict(entry: dict) -> str:
+    """A verification verdict validated against VERDICT_VOCAB; unknown -> 'uncertain'.
+    Mirrors raw_status(): coerce, don't raise. Works on both a top-level correction and a
+    probe's inline `verification` object (both carry a `verdict` key)."""
+    s = (entry.get("verdict") or "").strip().lower()
+    return s if s in VERDICT_VOCAB else "uncertain"
 
 
 def probe_status(p: dict) -> str:
@@ -292,9 +327,134 @@ def write_checklist_csv(checklist_path: Path, out_path: Path):
     return len(rows)
 
 
+def _bool_cell(value) -> str:
+    """Render an optional JSON bool as a stable CSV cell: 'true'/'false'/'' (absent)."""
+    if value is None:
+        return ""
+    return "true" if value else "false"
+
+
+def normalize_recommendation(rec) -> dict:
+    """Normalize a recommendation to a uniform object so the audit punch-list can render
+    any mix of legacy and enriched forms.
+
+    Back-compat rule: a plain string -> {title: <string>, priority: "P2", audit: {}}.
+    An object uses its fields with safe defaults (priority -> "P2" if absent/invalid;
+    audit -> {} if absent or not a dict). Mirrors raw_status()'s never-raise posture.
+    """
+    if isinstance(rec, str):
+        return {"priority": "P2", "title": rec, "rationale": "", "audit": {}}
+    rec = rec or {}
+    priority = (rec.get("priority") or "P2").strip().upper()
+    if priority not in PRIORITY_VOCAB:
+        priority = "P2"
+    audit = rec.get("audit")
+    return {
+        "priority": priority,
+        "title": rec.get("title", ""),
+        "rationale": rec.get("rationale", ""),
+        "audit": audit if isinstance(audit, dict) else {},
+    }
+
+
+def write_audit_checklist_csv(platform_data: dict, out_path: Path) -> int:
+    """Audit punch-list: the assessment's recommendations as account-runnable check items.
+
+    One row per recommendation (string or object), sorted P0<P1<P2 (stable, so author
+    order is preserved within a tier). `current_state` is always blank — it is filled in
+    when the checklist is actually run against an account. Distinct from the `checklist`
+    mode, which exports the probing *questions*.
+    """
+    platform = platform_data.get("platform", "unknown")
+    fieldnames = ["platform", "priority", "control", "rationale", "how_to_check",
+                  "pass_criterion", "current_state", "remediation", "owner", "evidence"]
+    recs = [normalize_recommendation(r) for r in (platform_data.get("recommendations") or [])]
+    recs.sort(key=lambda r: PRIORITY_ORDER.get(r["priority"], 2))
+
+    with open(out_path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        w.writeheader()
+        for r in recs:
+            a = r["audit"]
+            w.writerow({
+                "platform": platform,
+                "priority": r["priority"],
+                "control": r["title"],
+                "rationale": r["rationale"],
+                "how_to_check": a.get("how_to_check", ""),
+                "pass_criterion": a.get("pass_criterion", ""),
+                "current_state": "",  # fill-in: pass / fail / n-a
+                "remediation": a.get("remediation", ""),
+                "owner": a.get("owner", ""),
+                "evidence": a.get("evidence", ""),
+            })
+    return len(recs)
+
+
+def write_corrections_csv(platform_data: dict, out_path: Path) -> int:
+    """Fact-check pass output: every claim a verification step refuted/flagged, with the
+    corrected statement and source.
+
+    Primary rows come from the top-level `corrections` array. Rows are also synthesized
+    from any probe carrying an inline `verification` object whose verdict means the draft
+    was wrong (refuted/outdated), so nothing is lost if the author only recorded it inline.
+    A probe already referenced by a top-level correction (same `probe` name) is not
+    duplicated. Legacy JSON with neither field yields a valid header-only CSV.
+    """
+    platform = platform_data.get("platform", "unknown")
+    fieldnames = ["platform", "signal", "probe", "claim", "verdict",
+                  "correction", "evidence", "reconciled"]
+    rows = []
+    referenced_probes = set()
+
+    for c in (platform_data.get("corrections") or []):
+        verdict = _verdict(c)
+        probe = c.get("probe", "")
+        if probe:
+            referenced_probes.add(probe)
+        rows.append({
+            "platform": platform,
+            "signal": c.get("signal", ""),
+            "probe": probe,
+            "claim": c.get("claim", ""),
+            "verdict": verdict,
+            "correction": c.get("correction", ""),
+            "evidence": c.get("evidence", ""),
+            "reconciled": _bool_cell(c.get("reconciled")),
+        })
+
+    for sig_key, p in _iter_all_probes(platform_data):
+        v = p.get("verification")
+        if not isinstance(v, dict):
+            continue
+        verdict = _verdict(v)
+        if verdict not in VERDICT_NEEDS_CORRECTION:
+            continue
+        if p.get("probe", "") in referenced_probes:
+            continue
+        rows.append({
+            "platform": platform,
+            "signal": sig_key,
+            "probe": p.get("probe", ""),
+            "claim": v.get("checked", ""),
+            "verdict": verdict,
+            "correction": v.get("correction", ""),
+            "evidence": v.get("evidence", ""),
+            "reconciled": _bool_cell(v.get("reconciled")),
+        })
+
+    with open(out_path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        w.writeheader()
+        w.writerows(rows)
+    return len(rows)
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Generate CSV outputs for cloud-security-posture-may-20")
-    parser.add_argument("--mode", choices=["deep-dive", "matrix", "checklist"], required=True)
+    parser = argparse.ArgumentParser(description="Generate CSV outputs for cloud-security-posture")
+    parser.add_argument("--mode",
+                        choices=["deep-dive", "matrix", "checklist", "corrections", "audit"],
+                        required=True)
     parser.add_argument("--in", dest="inputs", nargs="*", default=[],
                         help="One or more platform JSON files")
     parser.add_argument("--out-dir", required=True, help="Directory to write CSV files into")
@@ -323,7 +483,7 @@ def main():
 
     else:
         if not args.inputs:
-            print("Error: --in is required for deep-dive and matrix modes", file=sys.stderr)
+            print("Error: --in is required for all modes except checklist", file=sys.stderr)
             sys.exit(1)
 
         platforms_data = []
@@ -332,15 +492,16 @@ def main():
                 data = json.load(f)
             platforms_data.append(data)
 
-        # Always write per-platform deep-dive CSVs
-        for pdata in platforms_data:
-            platform = _slug(pdata.get("platform", "unknown"))
-            out_path = out_dir / f"{platform}-deep-dive.csv"
-            write_deep_dive_csv(pdata, out_path)
-            written.append(out_path)
-            print(f"Wrote deep-dive CSV: {out_path}")
+        # deep-dive and matrix both emit per-platform deep-dive CSVs; corrections/audit
+        # each emit a single per-platform CSV instead (no surprise deep-dive).
+        if args.mode in ("deep-dive", "matrix"):
+            for pdata in platforms_data:
+                platform = _slug(pdata.get("platform", "unknown"))
+                out_path = out_dir / f"{platform}-deep-dive.csv"
+                write_deep_dive_csv(pdata, out_path)
+                written.append(out_path)
+                print(f"Wrote deep-dive CSV: {out_path}")
 
-        # If matrix mode and ≥2 platforms, write matrix
         if args.mode == "matrix":
             if len(platforms_data) < 2:
                 print("Warning: matrix mode requested with only 1 platform; producing matrix anyway", file=sys.stderr)
@@ -348,6 +509,20 @@ def main():
             write_matrix_csv(platforms_data, out_path)
             written.append(out_path)
             print(f"Wrote comparison matrix CSV: {out_path}")
+
+        elif args.mode == "corrections":
+            for pdata in platforms_data:
+                out_path = out_dir / f"{_slug(pdata.get('platform', 'unknown'))}-corrections.csv"
+                count = write_corrections_csv(pdata, out_path)
+                written.append(out_path)
+                print(f"Wrote corrections CSV: {out_path} ({count} corrections)")
+
+        elif args.mode == "audit":
+            for pdata in platforms_data:
+                out_path = out_dir / f"{_slug(pdata.get('platform', 'unknown'))}-audit-checklist.csv"
+                count = write_audit_checklist_csv(pdata, out_path)
+                written.append(out_path)
+                print(f"Wrote audit checklist CSV: {out_path} ({count} items)")
 
     if args.print_paths:
         for p in written:
